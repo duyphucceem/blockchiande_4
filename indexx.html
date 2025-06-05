@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            max-width: 900px;
+            margin: auto;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 10px;
+        }
+
+        input {
+            width: 100%;
+            padding: 8px;
+            margin-top: 4px;
+        }
+
+        button {
+            padding: 8px 16px;
+            font-size: 15px;
+            cursor: pointer;
+            margin-right: 8px;
+        }
+
+        #status {
+            margin-top: 15px;
+            font-weight: bold;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th,
+        td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: left;
+        }
+
+        th {
+            background: #f4f4f4;
+        }
+
+        .action-btn {
+            padding: 4px 10px;
+            font-size: 13px;
+            margin-right: 4px;
+        }
+
+        .section-title {
+            margin-top: 30px;
+            margin-bottom: 6px;
+        }
+
+        .hide {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Giao dịch</h2>
+    <form id="paymentForm">
+        <label>
+            Người bán:
+            <input type="text" id="seller" placeholder="Tên người bán" required />
+        </label>
+        <label>
+            Người mua:
+            <input type="text" id="buyer" placeholder="Tên người mua" required />
+        </label>
+        <button type="submit">Thêm giao dịch</button>
+        <button type="button" id="btnLoadPayments">DS giao dịch</button>
+        <button type="button" id="btnLoadEditHistory">DS giao dịch đã sửa</button>
+        <button type="button" id="btnLoadDeleteHistory">DS giao dịch đã xóa</button>
+    </form>
+    <p id="status"></p>
+    <h3 class="section-title">DS giao dịch</h3>
+    <table id="paymentsTable" class="hide">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Người bán</th>
+                <th>Người mua</th>
+                <th>Thời gian</th>
+                <th>Hành động</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+    <h3 class="section-title">DS giao dịch đã sửa</h3>
+    <table id="editHistoryTable" class="hide">
+        <thead>
+            <tr>
+                <th>Payment ID</th>
+                <th>Người bán cũ</th>
+                <th>Người mua cũ</th>
+                <th>Người bán mới</th>
+                <th>Người mua cũ</th>
+                <th>Thời gian cập nhật</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+    <h3 class="section-title">DS giao dịch đã xóa</h3>
+    <table id="deleteHistoryTable" class="hide">
+        <thead>
+            <tr>
+                <th>Payment ID</th>
+                <th>Người bán</th>
+                <th>Người mua</th>
+                <th>Thời gain</th>
+                <th>Thời gian xóa</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+    <script>
+        //cấu hình mạng, ví, kết nối smart contract
+        const RPC_URL = 'https://data-seed-prebsc-1-s1.binance.org:8545/';
+        const PRIVATE_KEY = '006ff979bae146701ec614aa0f895dd0a3db756bd806853e934e93f843d214aa';
+        const CONTRACT_ADDR = '0xF9b3d15f4C2C1636ad937071409470fC9097d213';
+        const CONTRACT_ABI = [
+            "function recordPayment(string seller, string buyer) public",
+            "function editPayment(uint256 index, string newSeller, string newBuyer) public",
+            "function deletePayment(uint256 index) public",
+            "function getPaymentCount() public view returns (uint256)",
+            "function getPaymentByIndex(uint256 index) public view returns (string memory, string memory, uint256)",
+            "function getEditHistoryCount() public view returns (uint256)",
+            "function getEditHistory(uint256 index) public view returns (uint256, string memory, string memory, string memory, string memory, uint256)",
+            "function getDeleteHistoryCount() public view returns (uint256)",
+            "function getDeleteHistory(uint256 index) public view returns (uint256, string memory, string memory, uint256, uint256)"
+        ];
+
+        const provider = new ethers.providers.JsonRpcProvider(RPC_URL);
+        const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+        const contract = new ethers.Contract(CONTRACT_ADDR, CONTRACT_ABI, wallet);
+
+        //cài đặt phí tối đa tránh nghẽn mạng 
+        // (đợt này meta mask đang cập nhật thêm mạng solana nên hơi nghẽn, mình đặt phần set phí mạng này lên cao để tránh bị pending lệnh)
+        const GWEI = ethers.utils.parseUnits("1", "gwei");
+
+        //hàm thêm mới dữ liệu
+        async function savePayment(seller, buyer) {
+            return contract.recordPayment(seller, buyer, { gasPrice: GWEI });
+        }
+
+        //hàm update dữ liệu
+        async function editPayment(index, newSeller, newBuyer) {
+            return contract.editPayment(index, newSeller, newBuyer, { gasPrice: GWEI });
+        }
+
+        //hàm xóa dữ liệu
+        async function deletePayment(index) {
+            return contract.deletePayment(index, { gasPrice: GWEI });
+        }
+
+
+        //hàm lấy ds giao dịch chính
+        async function loadPayments() {
+            const count = await contract.getPaymentCount();
+            const list = [];
+            for (let i = 0; i < count; i++) {
+                try {
+                    const [seller, buyer, ts] = await contract.getPaymentByIndex(i);
+                    list.push({ id: i, seller, buyer, ts: new Date(ts.toNumber() * 1000).toLocaleString() });
+                } catch (e) {
+                }
+            }
+            return list;
+        }
+
+        //hàm lấy ds giao dịch đã bị chỉnh sửa
+        async function loadEditHistories() {
+            const count = await contract.getEditHistoryCount();
+            const list = [];
+            for (let i = 0; i < count; i++) {
+                const [paymentId, oldSeller, oldBuyer, newSeller, newBuyer, editTime] = await contract.getEditHistory(i);
+                list.push({
+                    paymentId: paymentId.toNumber(),
+                    oldSeller,
+                    oldBuyer,
+                    newSeller,
+                    newBuyer,
+                    editTime: new Date(editTime.toNumber() * 1000).toLocaleString()
+                });
+            }
+            return list;
+        }
+
+        //hàm lấy ds giao dịch đã xóa
+        async function loadDeleteHistories() {
+            const count = await contract.getDeleteHistoryCount();
+            const list = [];
+            for (let i = 0; i < count; i++) {
+                const [paymentId, oldSeller, oldBuyer, oldTimestamp, deleteTime] = await contract.getDeleteHistory(i);
+                list.push({
+                    paymentId: paymentId.toNumber(),
+                    oldSeller,
+                    oldBuyer,
+                    oldTimestamp: new Date(oldTimestamp.toNumber() * 1000).toLocaleString(),
+                    deleteTime: new Date(deleteTime.toNumber() * 1000).toLocaleString()
+                });
+            }
+            return list;
+        }
+
+
+        //hàm đổ lại dữ liệu ra bảng ds giao dịch
+        function renderTable(payments) {
+            const table = document.getElementById('paymentsTable');
+            const tbody = table.querySelector('tbody');
+            tbody.innerHTML = '';
+            payments.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+              <td>${p.id}</td>
+              <td>${p.seller}</td>
+              <td>${p.buyer}</td>
+              <td>${p.ts}</td>
+              <td>
+                <button class="action-btn" onclick="editRow(${p.id})">Edit</button>
+                <button class="action-btn" onclick="deleteRow(${p.id})">Delete</button>
+              </td>
+            `;
+                tbody.appendChild(tr);
+            });
+            table.classList.toggle('hide', payments.length === 0);
+        }
+
+        //hàm đổ dữ liệu ra bảng ds giao dịch đã bị chỉnh sửa
+        function renderEditHistory(list) {
+            const table = document.getElementById('editHistoryTable');
+            const tbody = table.querySelector('tbody');
+            tbody.innerHTML = '';
+            list.forEach(e => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+              <td>${e.paymentId}</td>
+              <td>${e.oldSeller}</td>
+              <td>${e.oldBuyer}</td>
+              <td>${e.newSeller}</td>
+              <td>${e.newBuyer}</td>
+              <td>${e.editTime}</td>
+            `;
+                tbody.appendChild(tr);
+            });
+            table.classList.toggle('hide', list.length === 0);
+        }
+
+        //hàm đổ dữ liệu ra bảng ds giao dịch đã bị xóa
+        function renderDeleteHistory(list) {
+            const table = document.getElementById('deleteHistoryTable');
+            const tbody = table.querySelector('tbody');
+            tbody.innerHTML = '';
+            list.forEach(e => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+              <td>${e.paymentId}</td>
+              <td>${e.oldSeller}</td>
+              <td>${e.oldBuyer}</td>
+              <td>${e.oldTimestamp}</td>
+              <td>${e.deleteTime}</td>
+            `;
+                tbody.appendChild(tr);
+            });
+            table.classList.toggle('hide', list.length === 0);
+        }
+
+        document.getElementById('paymentForm').addEventListener('submit', async e => {
+            e.preventDefault();
+            const status = document.getElementById('status');
+            const seller = document.getElementById('seller').value.trim();
+            const buyer = document.getElementById('buyer').value.trim();
+            if (!seller || !buyer) {
+                status.textContent = 'Vui lòng điền cả người mua và người bán.';
+                return;
+            }
+            try {
+                status.textContent = 'Transaction...';
+                const tx = await savePayment(seller, buyer);
+                status.textContent = `Tx sent: ${tx.hash}, waiting for confirmation...`;
+                await tx.wait();
+                status.textContent = `Lưu thành công! TxHash: ${tx.hash}`;
+                await onLoadPayments();
+            } catch (err) {
+                console.error(err);
+                status.textContent = 'Có lỗi xảy ra';
+            }
+        });
+
+        //bắt sự kiện bấm nút lấy ds giao dịch
+        document.getElementById('btnLoadPayments').addEventListener('click', onLoadPayments);
+        async function onLoadPayments() {
+            const status = document.getElementById('status');
+            status.textContent = 'Loading payments...';
+            try {
+                const payments = await loadPayments();
+                renderTable(payments);
+                status.textContent = `Loaded ${payments.length} payments.`;
+            } catch (err) {
+                console.error(err);
+                status.textContent = 'Có lỗi xảy ra';
+            }
+        }
+
+        //bắt sự kiện bấm nút lấy ds giao dịch đã sửa
+        document.getElementById('btnLoadEditHistory').addEventListener('click', async () => {
+            const status = document.getElementById('status');
+            status.textContent = 'Loading...';
+            try {
+                const list = await loadEditHistories();
+                renderEditHistory(list);
+                status.textContent = `Load ${list.length} thành công.`;
+            } catch (e) {
+                status.textContent = 'Lấy danh sách thất bại';
+                console.error(e);
+            }
+        });
+
+        //bắt sự kiện bấm nút lấy ds giao dịch đã xóa
+        document.getElementById('btnLoadDeleteHistory').addEventListener('click', async () => {
+            const status = document.getElementById('status');
+            status.textContent = 'Loading delete history...';
+            try {
+                const list = await loadDeleteHistories();
+                renderDeleteHistory(list);
+                status.textContent = `Load ${list.length} thành công.`;
+            } catch (e) {
+                status.textContent = 'Lấy danh sách tất bại';
+                console.error(e);
+            }
+        });
+
+        //bắt sự kiện cập nhật
+        window.editRow = async function (id) {
+            const newSeller = prompt("Nhập tên người mua mới:");
+            const newBuyer = prompt("Nhập tên người bán mới:");
+            if (!newSeller || !newBuyer) return;
+            const status = document.getElementById('status');
+            try {
+                status.textContent = 'Đang cập nhật...';
+                const tx = await editPayment(id, newSeller, newBuyer);
+                status.textContent = `Edit tx sent: ${tx.hash}, waiting for confirmation...`;
+                await tx.wait();
+                status.textContent = `Cập nhật thành công! TxHash: ${tx.hash}`;
+                await onLoadPayments();
+            } catch (e) {
+                status.textContent = 'Cập nhật thất bại';
+                console.error(e);
+            }
+        };
+
+        //bắt sự kiện xóa giao dịch
+        window.deleteRow = async function (id) {
+            if (!confirm('Bạn có chắc muốn xóa giao dịch này?')) return;
+            const status = document.getElementById('status');
+            try {
+                status.textContent = 'Đang xóa...';
+                const tx = await deletePayment(id);
+                status.textContent = `Delete tx sent: ${tx.hash}, waiting for confirmation...`;
+                await tx.wait();
+                status.textContent = `Xóa thành công! TxHash: ${tx.hash}`;
+                await onLoadPayments();
+            } catch (e) {
+                status.textContent = 'Xóa thất bại';
+                console.error(e);
+            }
+        };
+
+        onLoadPayments();
+    </script>
+</body>
+
+</html>
