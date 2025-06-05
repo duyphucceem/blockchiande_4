@@ -72,5 +72,4 @@ Dữ liệu hiển thị trong 2 bảng tương ứng bên dưới.
 
 ---
 
-## 📦 Cấu trúc dự án
 
